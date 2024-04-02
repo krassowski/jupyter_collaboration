@@ -44,9 +44,9 @@ dev = [
 ]
 test = [
     "coverage",
-    "jupyter_server[test]>=2.13.0",
+    "jupyter_server[test]>=2.0.0",
     "jupyter_server_fileid[test]",
-    "pytest>=8.1.1",
+    "pytest>=7.0",
     "pytest-cov",
     "websockets",
     "importlib_metadata >=3.6; python_version<'3.10'",
