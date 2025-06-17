@@ -66,7 +66,6 @@ class YDocWebSocketHandler(WebSocketHandler, JupyterHandler):
 
     _message_queue: asyncio.Queue[Any]
     _background_tasks: set[asyncio.Task]
-    _room_locks: dict[str, asyncio.Lock] = {}
 
     def _room_lock(self, room_id: str) -> asyncio.Lock:
         if room_id not in self._room_locks:
@@ -175,7 +174,9 @@ class YDocWebSocketHandler(WebSocketHandler, JupyterHandler):
         ystore_class: type[BaseYStore],
         document_cleanup_delay: float | None = 60.0,
         document_save_delay: float | None = 1.0,
+        room_locks: dict[str, asyncio.Lock] = None,
     ) -> None:
+        self._room_locks = room_locks if room_locks is not None else {}
         self._background_tasks = set()
         # File ID manager cannot be passed as argument as the extension may load after this one
         self._file_id_manager = self.settings["file_id_manager"]
