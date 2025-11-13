@@ -146,6 +146,29 @@ test.describe('Initialization', () => {
     await page.notebook.close(true);
     await guestPage.notebook.close(true);
   });
+
+  test('Rename a notebook', async({ page, tmpPath }) => {
+    await page.filebrowser.refresh();
+    await page.notebook.open(exampleNotebook);
+    await page.notebook.activate(exampleNotebook);
+
+    // Enter edit mode on cell number three
+    await page.notebook.enterCellEditingMode(3);
+    expect(await page.notebook.isCellInEditingMode(3)).toBe(true);
+
+    // Rename notebook
+    await page.contents.renameFile(`${tmpPath}/${exampleNotebook}`, `${tmpPath}/differentName.ipynb`);
+
+    // Save the notebook manually
+    await page.notebook.save();
+
+    // This tests against a out-of-band reloads that can cause
+    // change of active cell and of the notebook edit/command mode
+    expect(await page.notebook.isCellInEditingMode(3)).toBe(true);
+
+    // Rename it back for cleanup
+    await page.contents.renameFile(`${tmpPath}/differentName.ipynb`, `${tmpPath}/${exampleNotebook}`);
+  });
 });
 
 test.describe('Ten clients', () => {
