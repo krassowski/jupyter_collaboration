@@ -46,7 +46,7 @@ test.describe('Conflict handling', () => {
   });
 
   test(
-    'handles room eviction and reconnection without crashing',
+    'shows a conflict dialog when document structure changes between reconnections',
     async ({ page, request, tmpPath, baseURL }) => {
       const notebookPath = `${tmpPath}/${notebookName}`;
 
@@ -86,34 +86,72 @@ test.describe('Conflict handling', () => {
         // No kernel dialog
       }
 
-      // Make some edits to the notebook
+      // Type something in cell 0. The keystroke creates a Yjs item whose
+      // parent is the source Text branch.
       await page.notebook.enterCellEditingMode(0);
-      await page.keyboard.type('print("hello")');
+      await page.keyboard.type('x = 1');
       await page.notebook.leaveCellEditingMode(0);
 
-      // Wait for sync
+      // Give y-websocket a moment to deliver the SYNC_UPDATE to the server.
       await page.waitForTimeout(500);
 
-      // Simulate room eviction by going offline for long enough
+      // Simulate the production failure scenario
+      // 1. The browser goes offline.
       await page.context().setOffline(true);
+
+      // 2. Wait for room eviction and WebSocket timeout detection.
       await page.waitForTimeout(10000);
 
-      // Come back online —the server should recreate the room gracefully
+      // 3. Overwrite the notebook on disk to insert a NEW CELL at the beginning.
+      //    The Jupyter server normalises cell dicts to nbformat order:
+      //      {cell_type, execution_count, id, metadata, outputs, source}
+      //    so source Text lands at Yjs clock +7 from the cell Map's position
+      //    (0=Map, 1=cell_type, 2=execution_count, 3=id, 4=metadata YMap,
+      //     5=key1, 6=key2, 7=key3 [ContentAny], 8=outputs, 9=source YText).
+      //    With THREE metadata keys on cell-0, position (0,7) becomes the third
+      //    metadata entry (ContentAny).  The client's stale edit has parent=(0,7)
+      //    which now points to a non-shared-ref type → RuntimeError on the server.
+      const modifiedNotebook = {
+        ...INITIAL_NOTEBOOK,
+        cells: [
+          {
+            cell_type: 'code',
+            id: 'cell-0',
+            metadata: { trusted: true, collapsed: false, scrolled: false },
+            source: 'print("new cell")',
+            outputs: [],
+            execution_count: null
+          },
+          INITIAL_NOTEBOOK.cells[0]
+        ]
+      };
+      const putResp = await request.put(
+        `${baseURL}/api/contents/${notebookPath}`,
+        {
+          headers: { 'Content-Type': 'application/json' },
+          data: JSON.stringify({
+            type: 'notebook',
+            format: 'json',
+            content: modifiedNotebook
+          })
+        }
+      );
+      expect(putResp.ok()).toBeTruthy();
+
+      // 4. Come back online. y-websocket reconnects; the server creates
+      //    Room R2 from the modified file. The browser's YDoc still has the
+      //    edit referencing source Text at its R1 clock position. The stale
+      //    parent reference now points to a non-Text Yjs item.
       await page.context().setOffline(false);
 
-      // Verify the notebook is still accessible and we can still edit
-      // (If there was a crash, the WebSocket would be dead and this would timeout/fail)
-      await page.waitForTimeout(2000);
+      // 5. The frontend should receive the CONFLICT message and show a dialog.
+      const dialog = page.locator('.jp-Dialog');
+      await expect(dialog).toBeVisible({ timeout: 15000 });
+      await expect(dialog).toContainText('Edit Conflict');
 
-      // Try to make another edit to verify the notebook is still responding
-      await page.notebook.enterCellEditingMode(0);
-      const cellContent = await page.notebook.getCellTextInput(0);
-      expect(cellContent).toContain('print("hello")');
-      await page.keyboard.type(' world');
-      await page.notebook.leaveCellEditingMode(0);
-
-      // Verify we can still interact with the notebook
-      expect(true).toBeTruthy();
+      // Dismiss the dialog so the test can clean up.
+      await page.locator('.jp-Dialog .jp-mod-accept').click();
+      await expect(dialog).not.toBeVisible();
     }
   );
 });
