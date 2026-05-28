@@ -30,6 +30,7 @@ from .utils import JUPYTER_COLLABORATION_EVENTS_URI, LogLevel, MessageType, OutO
 
 YFILE = YDOCS["file"]
 
+
 class DocumentRoom(YRoom):
     """A Y room for a possibly stored document (e.g. a notebook)."""
 
@@ -248,7 +249,11 @@ class DocumentRoom(YRoom):
           [write_message(client_update)]
         """
         server_update = self.ydoc.get_update()
-        return bytes([MessageType.CONFLICT]) + write_message(server_update) + write_message(client_update)
+        return (
+            bytes([MessageType.CONFLICT])
+            + write_message(server_update)
+            + write_message(client_update)
+        )
 
     async def serve(self, channel):
         """Serve a client, intercepting InvalidParent conflicts without crashing the room."""
@@ -271,8 +276,6 @@ class DocumentRoom(YRoom):
                         continue
                     message_type = message[0]
                     if message_type == YMessageType.SYNC:
-                        sync_subtype = YSyncMessageType(message[1]).name
-                        if sync_subtype == "SYNC_STEP2":
                         self.log.debug(
                             "Received %s message from endpoint: %s",
                             YSyncMessageType(message[1]).name,
@@ -280,7 +283,6 @@ class DocumentRoom(YRoom):
                         )
                         try:
                             reply = handle_sync_message(message[1:], self.ydoc)
-                            if reply:
                         except RuntimeError as exc:
                             if "block parent" in str(exc):
                                 self.log.warning(

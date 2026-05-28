@@ -11,8 +11,6 @@ JavaScript objects through the global window variable.
 from typing import Any
 
 from jupyterlab.galata import configure_jupyter_server
-from pycrdt.store.base import BaseYStore, YDocNotFound
-from traitlets.config import LoggingConfigurable
 
 c: Any
 configure_jupyter_server(c)  # noqa
@@ -28,39 +26,11 @@ c.YDocExtension.document_cleanup_delay = 1
 c.ServerApp.websocket_ping_interval = 2  # seconds between pings
 c.ServerApp.websocket_ping_timeout = 5  # close connection if no pong within 5 s
 
-# Use a no-op ystore so every room is always rebuilt from the file via
-# _apply_deterministic_source_content.  Without this, the SQLiteYStore
-# persists R1's Yjs history; when R2 is created after room eviction it
-# loads that history (source Text still at clock N), the stale SYNC_STEP2
-# from the reconnecting client finds a valid parent, and no conflict fires.
-# This is safe for all galata tests because the test server starts fresh on
-# every CI run and each test uses a unique tmpPath — no test relies on
-# ystore history surviving across rooms.
-
-
-class _NoOpYStoreMeta(type(LoggingConfigurable), type(BaseYStore)):
-    pass
-
-
-class _NoOpYStore(LoggingConfigurable, BaseYStore, metaclass=_NoOpYStoreMeta):
-    def __init__(self, path: str, metadata_callback=None, log=None, **kwargs):
-        LoggingConfigurable.__init__(self, **kwargs)
-
-    async def write(self, data: bytes) -> None:
-        pass
-
-    async def read(self):
-        if False:
-            yield  # satisfy the async-generator protocol
-
-    async def apply_updates(self, ydoc) -> None:
-        raise YDocNotFound
-
-    async def start(self, *, task_status=None, from_context_manager: bool = False):
-        self.started.set()
-
-
-c.YDocExtension.ystore_class = _NoOpYStore
+# Use SQLiteYStore with a predictable path so conflict tests can delete
+# the database during the offline period to force room recreation via
+# _apply_deterministic_source_content. This simulates the production scenario
+# where a room is evicted and the notebook structure changes on disk.
+c.SQLiteYStore.db_path = "/tmp/jupyter_ystore_ui_test.db"
 
 # Uncomment to set server log level to debug level
 # c.ServerApp.log_level = "DEBUG"

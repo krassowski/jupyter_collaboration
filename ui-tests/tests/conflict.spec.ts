@@ -2,6 +2,7 @@
 // Distributed under the terms of the Modified BSD License.
 
 import { expect, galata, test } from '@jupyterlab/galata';
+import { unlink } from 'fs/promises';
 
 /**
  * A minimal notebook with one cell.
@@ -34,7 +35,7 @@ const INITIAL_NOTEBOOK = {
   ]
 };
 
-test.describe('Conflict handling', () => {
+test.describe.serial('Conflict handling', () => {
   const notebookName = 'conflict_test.ipynb';
 
   test.afterEach(async ({ page, request, tmpPath }) => {
@@ -74,19 +75,7 @@ test.describe('Conflict handling', () => {
       await page.notebook.open(notebookName);
       await conflictListenerAttached;
 
-      // Dismiss kernel selection dialog if it appears
-      const noKernelBtn = page
-        .locator('.jp-Dialog')
-        .getByRole('button', { name: 'No Kernel' });
-      try {
-        await noKernelBtn.waitFor({ state: 'visible', timeout: 5000 });
-        await noKernelBtn.click();
-        await page.locator('.jp-Dialog').waitFor({ state: 'hidden', timeout: 3000 });
-      } catch {
-        // No kernel dialog
-      }
-
-      // Type something in cell 0. The keystroke creates a Yjs item whose
+      // Type something in cell 0.
       // parent is the source Text branch.
       await page.notebook.enterCellEditingMode(0);
       await page.keyboard.type('x = 1');
@@ -102,7 +91,13 @@ test.describe('Conflict handling', () => {
       // 2. Wait for room eviction and WebSocket timeout detection.
       await page.waitForTimeout(10000);
 
-      // 3. Overwrite the notebook on disk to insert a NEW CELL at the beginning.
+      // 3. Delete the ystore database to force Room R2 to rebuild from disk
+      //    via _apply_deterministic_source_content (client_id=0). Without this,
+      //    SQLiteYStore preserves R1's history and R2 uses aset(), keeping the
+      //    source Text at the original clock position → no conflict.
+      await unlink('/tmp/jupyter_ystore_ui_test.db');
+
+      // 4. Overwrite the notebook on disk to insert a NEW CELL at the beginning.
       //    The Jupyter server normalises cell dicts to nbformat order:
       //      {cell_type, execution_count, id, metadata, outputs, source}
       //    so source Text lands at Yjs clock +7 from the cell Map's position
@@ -138,13 +133,13 @@ test.describe('Conflict handling', () => {
       );
       expect(putResp.ok()).toBeTruthy();
 
-      // 4. Come back online. y-websocket reconnects; the server creates
+      // 5. Come back online. y-websocket reconnects; the server creates
       //    Room R2 from the modified file. The browser's YDoc still has the
       //    edit referencing source Text at its R1 clock position. The stale
       //    parent reference now points to a non-Text Yjs item.
       await page.context().setOffline(false);
 
-      // 5. The frontend should receive the CONFLICT message and show a dialog.
+      // 6. The frontend should receive the CONFLICT message and show a dialog.
       const dialog = page.locator('.jp-Dialog');
       await expect(dialog).toBeVisible({ timeout: 15000 });
       await expect(dialog).toContainText('Edit Conflict');
