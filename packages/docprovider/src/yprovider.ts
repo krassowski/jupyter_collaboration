@@ -221,7 +221,6 @@ export class WebSocketProvider implements IDocumentProvider, IForkProvider {
     this._yWebsocketProvider.on('status', ({ status }: { status: string }) => {
       if (status === 'connected') {
         this._attachConflictListener();
-        console.log('ATTACHED CONFLICT LISTENER');
       }
     });
   }

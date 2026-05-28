@@ -67,16 +67,9 @@ test.describe.serial('Conflict handling', () => {
 
       // Open the notebook — this connects the browser's y-websocket to the server.
       await page.filebrowser.refresh();
-
-      const conflictListenerAttached = page.waitForEvent('console', msg =>
-        msg.type() === 'log' && msg.text() === 'ATTACHED CONFLICT LISTENER'
-      );
-
       await page.notebook.open(notebookName);
-      await conflictListenerAttached;
 
       // Type something in cell 0.
-      // parent is the source Text branch.
       await page.notebook.enterCellEditingMode(0);
       await page.keyboard.type('x = 1');
       await page.notebook.leaveCellEditingMode(0);
