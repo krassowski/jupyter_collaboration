@@ -179,7 +179,7 @@ class FileLoader:
                 # saving is shielded so that it cannot be cancelled
                 # otherwise it could corrupt the file
                 done_saving = asyncio.Event()
-                task = asyncio.create_task(self._save_content(model, done_saving))
+                task = asyncio.create_task(self._save_content(model, done_saving, path))
                 saved_model = None
                 try:
                     saved_model = await asyncio.shield(task)
@@ -193,23 +193,43 @@ class FileLoader:
                 raise OutOfBandChanges
 
     async def _save_content(
-        self, model: dict[str, Any], done_saving: asyncio.Event
+        self, model: dict[str, Any], done_saving: asyncio.Event, path: str
     ) -> dict[str, Any]:
         try:
-            m = await ensure_async(self._contents_manager.save(model, self.path))
-            self.last_modified = m["last_modified"]
-            # TODO, get rid of the extra `get` here once upstream issue:
-            # https://github.com/jupyter-server/jupyter_server/issues/1453 is resolved
-            model_with_hash = await ensure_async(
-                self._contents_manager.get(
-                    self.path,
-                    content=False,
-                    require_hash=True,
-                )
-            )
-            return {**m, "hash": model_with_hash["hash"]}
+            try:
+                return await self._save_content_at_path(model, path)
+            except Exception as save_error:
+                # The file may have been renamed after the metadata check in
+                # maybe_save_content but before the save reached the contents
+                # manager. Retry only if the stable file ID now resolves to a
+                # different path; errors for deleted files must still surface.
+                try:
+                    new_path = self.path
+                except Exception:
+                    # Deleting a file also removes its file ID. Do not replace
+                    # the original contents manager error with the path lookup
+                    # failure in that case.
+                    raise save_error from None
+                if new_path == path:
+                    raise
+                self._log.info("File moved while saving: %s -> %s; retrying", path, new_path)
+                return await self._save_content_at_path(model, new_path)
         finally:
             done_saving.set()
+
+    async def _save_content_at_path(self, model: dict[str, Any], path: str) -> dict[str, Any]:
+        m = await ensure_async(self._contents_manager.save(model, path))
+        self.last_modified = m["last_modified"]
+        # TODO, get rid of the extra `get` here once upstream issue:
+        # https://github.com/jupyter-server/jupyter_server/issues/1453 is resolved
+        model_with_hash = await ensure_async(
+            self._contents_manager.get(
+                path,
+                content=False,
+                require_hash=True,
+            )
+        )
+        return {**m, "hash": model_with_hash["hash"]}
 
     async def _watch_file(self) -> None:
         """
