@@ -11,6 +11,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from jupyter_server.auth import authorized
+from jupyter_server.auth.decorator import ws_authenticated
 from jupyter_server.base.handlers import APIHandler, JupyterHandler
 from jupyter_server.utils import ensure_async
 from jupyter_ydoc import ydocs as YDOCS
@@ -64,6 +65,10 @@ class YDocWebSocketHandler(WebSocketHandler, JupyterHandler):
     - Although it's currently not used in ypy-websocket, ``recv()`` is an async method for
        receiving a message.
     """
+
+    # `JupyterHandler` does not define `auth_resource` (only `APIHandler` does),
+    # so it has to be set explicitly for `@authorized` to work
+    auth_resource = "contents"
 
     _message_queue: asyncio.Queue[Any]
     _background_tasks: set[asyncio.Task]
@@ -137,6 +142,10 @@ class YDocWebSocketHandler(WebSocketHandler, JupyterHandler):
                         self.log,
                         exception_handler=exception_logger,
                         save_delay=self._document_save_delay,
+                        document_load_progressively=self._document_load_progressively,
+                        notebook_output_delay_threshold_mb=(
+                            self._notebook_output_delay_threshold_mb
+                        ),
                     )
 
                 else:
@@ -181,6 +190,8 @@ class YDocWebSocketHandler(WebSocketHandler, JupyterHandler):
         room_locks: dict[str, asyncio.Lock] | None = None,
         document_cleanup_delay: float | None = 60.0,
         document_save_delay: float | None = 1.0,
+        document_load_progressively: bool = False,
+        notebook_output_delay_threshold_mb: float | None = 100,
     ) -> None:
         self._background_tasks = set()
         # File ID manager cannot be passed as argument as the extension may load after this one
@@ -189,6 +200,8 @@ class YDocWebSocketHandler(WebSocketHandler, JupyterHandler):
         self._ystore_class = ystore_class
         self._cleanup_delay = document_cleanup_delay
         self._document_save_delay = document_save_delay
+        self._document_load_progressively = document_load_progressively
+        self._notebook_output_delay_threshold_mb = notebook_output_delay_threshold_mb
         self._websocket_server = ywebsocket_server
         self._message_queue = asyncio.Queue()
         self._room_id = ""
@@ -221,21 +234,19 @@ class YDocWebSocketHandler(WebSocketHandler, JupyterHandler):
             raise StopAsyncIteration()
         return message
 
+    @ws_authenticated
+    @authorized
     async def get(self, *args, **kwargs):
         """
-        Overrides default behavior to check whether the client is authenticated or not.
+        Overrides default behavior to check whether the client is authenticated
+        and authorized to read the document.
         """
-        if self.current_user is None:
-            self.log.warning("Couldn't authenticate WebSocket connection")
-            raise web.HTTPError(403)
         return await super().get(*args, **kwargs)
 
     async def open(self, room_id: str) -> None:  # type:ignore[override]
         """
         On connection open.
         """
-        self.create_task(self._websocket_server.serve(self))
-
         if isinstance(self.room, DocumentRoom):
             # Close the connection if the document session expired
             session_id = self.get_query_argument("sessionId", "")
@@ -280,6 +291,7 @@ class YDocWebSocketHandler(WebSocketHandler, JupyterHandler):
                 # Initialize the room
                 async with self._room_lock(self._room_id):
                     await self.room.initialize()
+                self.create_task(self._websocket_server.serve(self))
                 self._emit_awareness_event(self.current_user.username, "join")
             except Exception as e:
                 _, _, file_id = decode_file_path(self._room_id)
@@ -327,6 +339,7 @@ class YDocWebSocketHandler(WebSocketHandler, JupyterHandler):
 
             self._emit(LogLevel.INFO, "initialize", "New client connected.")
         else:
+            self.create_task(self._websocket_server.serve(self))
             if self._room_id != "JupyterLab:globalAwareness":
                 self._emit_awareness_event(self.current_user.username, "join")
 
@@ -548,12 +561,16 @@ class DocSessionHandler(APIHandler):
 
 
 class TimelineHandler(APIHandler):
+    auth_resource = "contents"
+
     def initialize(
         self, ystore_class: type[BaseYStore], ywebsocket_server: JupyterWebsocketServer
     ) -> None:
         self.ystore_class = ystore_class
         self.ywebsocket_server = ywebsocket_server
 
+    @web.authenticated
+    @authorized  # type: ignore[misc]
     async def get(self, path: str) -> None:
         idx = uuid4().hex
         file_id_manager = self.settings["file_id_manager"]
@@ -611,9 +628,13 @@ class TimelineHandler(APIHandler):
 
 
 class UndoRedoHandler(APIHandler):
+    auth_resource = "contents"
+
     def initialize(self, ywebsocket_server: JupyterWebsocketServer) -> None:
         self._websocket_server = ywebsocket_server
 
+    @web.authenticated
+    @authorized
     async def put(self, room_id):
         try:
             action = str(self.request.query_arguments.get("action")[0].decode("utf-8"))

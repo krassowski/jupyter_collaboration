@@ -30,6 +30,10 @@ jobs:
           pip install "jupyterlab>=4.6.0b1,<5"
           jlpm install
 
+      - name: Build the extension
+        run: |
+          jlpm build
+
       - name: Run pre-commit
         uses: pre-commit/action@v3.0.1
         with:
@@ -126,6 +130,12 @@ jobs:
         run: |
           python -W ignore::ImportWarning -m pytest -vv --cov jupyter_server_ydoc --cov-branch --cov-report term-missing:skip-covered
 
+      - name: Check that all endpoints are authenticated
+        shell: bash
+        run: |
+          set -eux
+          python .github/scripts/check_auth.py
+
       - uses: jupyterlab/maintainer-tools/.github/actions/upload-coverage@v1
 
       - name: Build the extension
@@ -159,7 +169,7 @@ jobs:
 
       - name: Run the unit tests
         run: |
-          pytest -vv -W default || pytest -vv -W default --lf
+          pytest -vv -W default
 
   test_prereleases:
     name: Test Prereleases
@@ -184,7 +194,7 @@ jobs:
 
       - name: Run the tests
         run: |
-          pytest -vv -W default || pytest -vv --lf
+          pytest -vv -W default
 
   make_sdist:
     name: Make SDist
@@ -306,6 +316,7 @@ jobs:
         run: |
           jlpm test
           TIMELINE_FEATURE=1 jlpm test:timeline
+          CONFLICT_FEATURE=1 jlpm test:conflict
 
       - name: Upload Playwright Test report
         if: always()
